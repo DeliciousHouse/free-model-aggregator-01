@@ -598,7 +598,47 @@ async function simulateTrial(
   eq('parse retry-after: capped at 30', parseRetryAfterSeconds('999'), 30);
 }
 
-// ── Test 18: Loop terminates via failoverLoop (x=deferred, y=dead) ──
+// ── Test 18: Scheduled retry-after retries SAME provider; dead falls back ──
+{
+  const state = new RouterState();
+  const cands: Candidate[] = [
+    { providerId: 'primary', modelId: 'mp', wire: 'openai' as const, rating: 1475, auth: 'none' as const, key: '', base: '/p/primary' },
+    { providerId: 'fallback', modelId: 'mf', wire: 'openai' as const, rating: 1420, auth: 'none' as const, key: '', base: '/p/fallback' },
+  ];
+  let fallbackCalled = false;
+  const result = await failoverLoop(
+    cands, state,
+    async (candidate) => {
+      if (candidate.providerId === 'fallback') { fallbackCalled = true; return { ok: true as const, value: null }; }
+      const n = state.callCount('primary');
+      if (n === 1) return { ok: false as const, status: 429, body: 'refused this call', retryAfter: '0' };
+      return { ok: true as const, value: null };
+    },
+    async () => {},
+  );
+  assert('same-prov retry: served', result.ok);
+  assert('same-prov retry: served by primary', result.ok && result.candidate.providerId === 'primary');
+  assert('same-prov retry: fallback NOT called', !fallbackCalled);
+  eq('same-prov retry: primary calls', state.callCount('primary'), 2);
+
+  const state2 = new RouterState();
+  let fb2Called = false;
+  const result2 = await failoverLoop(
+    cands, state2,
+    async (candidate) => {
+      if (candidate.providerId === 'fallback') { fb2Called = true; return { ok: true as const, value: null }; }
+      return { ok: false as const, status: 429, body: 'budget is spent', retryAfter: null };
+    },
+    async () => {},
+  );
+  assert('dead fallback: served', result2.ok);
+  assert('dead fallback: served by fallback', result2.ok && result2.candidate.providerId === 'fallback');
+  assert('dead fallback: fallback called', fb2Called);
+  assert('dead fallback: primary dead', !state2.isAlive('primary'));
+  console.log(`  same-prov retry: primary retried in-place, fallback not called; dead→fallback works`);
+}
+
+// ── Test 19: Loop terminates (x=scheduled+transient, y=dead) ──
 {
   const state = new RouterState();
   const cands: Candidate[] = [
@@ -625,7 +665,7 @@ async function simulateTrial(
   console.log(`  loop-term: x calls=${state.callCount('x')}, y calls=${state.callCount('y')}`);
 }
 
-// ── Test 19: Hung response headers (AbortSignal.timeout) ──
+// ── Test 20: Hung response headers (AbortSignal.timeout) ──
 {
   const server = createServer(() => {});
   await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
@@ -663,7 +703,7 @@ async function simulateTrial(
   server.close();
 }
 
-// ── Test 20: Hung response body (AbortSignal.timeout covers body read) ──
+// ── Test 21: Hung response body (AbortSignal.timeout covers body read) ──
 {
   const server = createServer((_req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' });
@@ -706,7 +746,7 @@ async function simulateTrial(
   server.close();
 }
 
-// ── Test 21: Hard deadline (child process) ──
+// ── Test 22: Hard deadline (child process) ──
 {
   const start = Date.now();
   let exitCode = 0;

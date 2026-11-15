@@ -242,26 +242,12 @@ export async function failoverLoop<T = null>(
   waitFn?: (ms: number) => Promise<void>,
 ): Promise<{ ok: true; candidate: Candidate; value: T } | { ok: false; lastError: string }> {
   const skipped = new Set<string>();
-  const deferred = new Set<string>();
-  const retryAfterTimes = new Map<string, number>();
   let lastError = '';
   const doWait = waitFn ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)));
 
   for (;;) {
-    const combined = new Set([...skipped, ...deferred]);
-    const candidate = state.pickCandidate(candidates, combined);
+    const candidate = state.pickCandidate(candidates, skipped);
     if (!candidate) {
-      if (deferred.size > 0) {
-        const now = Date.now();
-        let waitMs = 0;
-        for (const pid of deferred) {
-          const until = retryAfterTimes.get(pid) ?? 0;
-          if (until > now) waitMs = Math.max(waitMs, until - now);
-        }
-        if (waitMs > 0) await doWait(waitMs);
-        deferred.clear();
-        continue;
-      }
       return { ok: false, lastError: lastError || 'all providers exhausted' };
     }
 
@@ -280,8 +266,7 @@ export async function failoverLoop<T = null>(
       state.recordScheduledRefusal(candidate.providerId);
       if (hasRetryAfter) {
         const secs = parseRetryAfterSeconds(result.retryAfter);
-        retryAfterTimes.set(candidate.providerId, Date.now() + secs * 1000);
-        deferred.add(candidate.providerId);
+        if (secs > 0) await doWait(secs * 1000);
       }
     } else {
       skipped.add(candidate.providerId);

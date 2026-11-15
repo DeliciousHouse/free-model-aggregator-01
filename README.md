@@ -68,7 +68,7 @@ Capacity estimates use the public `calls_min` values from the competition kit (m
 At runtime, a shared budget-bounded failover loop handles provider refusals:
 
 - **Dead** (`budget is spent`, `is out`): provider marked dead permanently. Triggers runtime replan of remaining requests using surviving providers.
-- **Scheduled** (`refused this call`): if `Retry-After` header present, provider is deferred — other candidates are tried first, then the deferred provider is retried after the indicated wait. Without `Retry-After`, the provider is retried immediately (call counter advances, so the next call number is different).
+- **Scheduled** (`refused this call`): the same provider is retried. If `Retry-After` header is present, the loop waits that duration before retrying. Without `Retry-After`, the provider is retried immediately. The call counter advances on each attempt, so the next call number is different. Fallback to the next candidate happens only on provider death, not on scheduled refusals.
 - **Transient** (generic 402, 429, 5xx, network error): provider skipped for this request, try next candidate.
 
 No arbitrary retry cap. Each scheduled refusal advances the call counter, so the loop makes finite progress bounded by provider budgets. The loop terminates when no eligible live candidate remains. A hard `process.exit` deadline at 170 seconds prevents runaway execution (10 seconds before the 180-second runtime wall). Every upstream fetch has an `AbortSignal.timeout` of 30 seconds for operational safety.
@@ -94,15 +94,16 @@ The test suite (`test/test.ts`) runs offline using the shared production `failov
 10. **buildUpstreamBody** — unified upstream body builder across wire combinations
 11. **translateJsonResponse** — JSON response translation passthrough and cross-wire
 12. **>5 refusals** — single provider survives 6 consecutive scheduled refusals via shared failoverLoop
-13. **Retry-after re-entry** — deferred provider re-entered after skip set cleared
+13. **Retry-after re-entry** — provider re-entered after skip set cleared
 14. **Scheduled keeps alive** — scheduled refusal does not mark provider dead
 15. **Plan counts** — openrouter=5, kilol=7, other 8 providers=1 each
 16. **Retry-after timing** — actual bounded wait (real setTimeout, ~1 second gap)
 17. **parseRetryAfterSeconds** — numeric, null, garbage, negative, capped at 30
-18. **Loop termination** — deferred→re-entry→transient→exhausted path terminates
-19. **Hung response headers** — AbortSignal.timeout fires on server that never responds (local HTTP server)
-20. **Hung response body** — AbortSignal.timeout fires on partial JSON body (local HTTP server)
-21. **Hard deadline** — child process exits via deadline timer within expected time
+18. **Same-provider retry** — scheduled+retry-after retries same provider (fallback not called); dead provider falls back to next candidate
+19. **Loop termination** — scheduled→transient→dead→exhausted path terminates
+20. **Hung response headers** — AbortSignal.timeout fires on server that never responds (local HTTP server)
+21. **Hung response body** — AbortSignal.timeout fires on partial JSON body (local HTTP server)
+22. **Hard deadline** — child process exits via deadline timer within expected time
 
 The test fixture at `test/fixture/prompt.txt` is a copy of the practice trial prompt. Override with `MAKEFUN_PROMPT_FILE` to test against a different prompt.
 
